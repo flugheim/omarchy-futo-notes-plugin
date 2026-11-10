@@ -74,7 +74,12 @@ class HttpError(Exception):
 
 def request(method, url, token=None, body=None, raw=False, timeout=20):
     data = None
-    headers = {"Accept": "application/json"}
+    headers = {
+        "Accept": "application/json",
+        # Some reverse proxies (Cloudflare in front of notes.example.com)
+        # reject urllib's default signature, so present a normal app UA.
+        "User-Agent": "FutoNotes/1.9.2 (Linux; omarchy-plugin)",
+    }
     if body is not None:
         if isinstance(body, (bytes, bytearray)):
             data = body

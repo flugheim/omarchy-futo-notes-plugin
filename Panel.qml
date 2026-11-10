@@ -121,6 +121,8 @@ Panel {
       notes = res.notes || []
       selectedNote = null
       errorMessage = ""
+      statusMessage = ""
+      showSettings = false
       settings = Object.assign({}, settings, {
         lastCount: notes.length,
         lastSync: Qt.formatTime(new Date(), "HH:mm"),
@@ -197,7 +199,7 @@ Panel {
     onStarted: write(root.pendingPayload)
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.handleSyncResult(text())
+      onStreamFinished: root.handleSyncResult(text)
     }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(code) {
