@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """
-Futo Notes sync + decrypt helper for the Omarchy plugin.
+Futo Notes sync + decrypt + write helper for the Omarchy plugin.
 
-Reads a JSON request from stdin:
-    {"serverUrl": "https://notes.example.com", "password": "..."}
+Reads a JSON request from stdin (one line only):
+    {"serverUrl": "https://notes.example.com", "password": "..."}              # sync (read)
+    {"serverUrl": "...", "password": "...", "action": "create", "path": "...", "content": "..."}
+    {"serverUrl": "...", "password": "...", "action": "update", "id": "...", "version": "3", "path": "...", "content": "..."}
+    {"serverUrl": "...", "password": "...", "action": "delete", "id": "...", "version": "3"}
 
 Writes a JSON response to stdout:
-    {"ok": true, "notes": [ {id, path, title, content, isImage, updatedAt} ]}
+    {"ok": true, "notes": [...]}
+    {"ok": true, "object": {...}}
     {"ok": false, "error": "..."}
 
 Uses the Futo Notes E2EE format documented at
 https://notes.futo.tech/docs/encryption/
+and the sync server API at
+https://notes.futo.tech/docs/sync-api/
 """
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import uuid
 import urllib.error
 import urllib.request
 
@@ -72,7 +80,8 @@ class HttpError(Exception):
     pass
 
 
-def request(method, url, token=None, body=None, raw=False, timeout=20):
+def request(method, url, token=None, body=None, raw=False, timeout=20,
+            extra_headers=None):
     data = None
     headers = {
         "Accept": "application/json",
@@ -80,6 +89,8 @@ def request(method, url, token=None, body=None, raw=False, timeout=20):
         # reject urllib's default signature, so present a normal app UA.
         "User-Agent": "FutoNotes/1.9.2 (Linux; omarchy-plugin)",
     }
+    if extra_headers:
+        headers.update(extra_headers)
     if body is not None:
         if isinstance(body, (bytes, bytearray)):
             data = body
@@ -141,6 +152,17 @@ def decrypt_blob(vault_key, blob):
     return AESGCM(vault_key).decrypt(nonce, ciphertext_and_tag, None)
 
 
+def encrypt_note(vault_key, path, content):
+    # frame = [0x02][4-byte BE path length][path][content]
+    path_bytes = path.encode("utf-8")
+    content_bytes = content.encode("utf-8")
+    frame = bytes([0x02]) + len(path_bytes).to_bytes(4, "big") + path_bytes + content_bytes
+
+    # blob = [12-byte nonce][AES-GCM(vault_key, nonce, frame)]
+    nonce = os.urandom(12)
+    return nonce + AESGCM(vault_key).encrypt(nonce, frame, None)
+
+
 def parse_frame(plaintext):
     if len(plaintext) < 5:
         raise ValueError("frame too small")
@@ -172,7 +194,6 @@ def title_from_path(path):
 def parse_blob_batch(data, keys):
     blobs = {}
     offset = 0
-    decoder = "utf-8"
     total = len(data)
     for _ in range(len(keys)):
         if offset + 2 > total:
@@ -181,7 +202,7 @@ def parse_blob_batch(data, keys):
         offset += 2
         if offset + key_len > total:
             break
-        key = data[offset:offset + key_len].decode(decoder, "replace")
+        key = data[offset:offset + key_len].decode("utf-8", "replace")
         offset += key_len
         if offset >= total:
             break
@@ -198,66 +219,63 @@ def parse_blob_batch(data, keys):
 
 
 # --------------------------------------------------------------------------
-# Sync
+# Session: login + unwrap vault key + pick vault
 # --------------------------------------------------------------------------
 
-def sync(server_url, password):
+def connect(server_url, password):
+    """Log in, open the vault, unwrap the vault key.
+
+    Returns (token, vault_key, collection_id) or raises HttpError/ValueError.
+    """
     base = server_url.rstrip("/")
 
     # 1. Learn auth mode (also validates the URL).
-    try:
-        root = request("GET", base + "/")
-    except HttpError as e:
-        return {"ok": False, "error": "Cannot reach server: %s" % e}
+    root = request("GET", base + "/")
     if root.get("name") != "futo-notes":
-        return {"ok": False, "error": "That URL does not look like a Futo Notes server."}
+        raise ValueError("That URL does not look like a Futo Notes server.")
 
     # 2. Sign in.
-    try:
-        login = request("POST", base + "/api/auth/password/login",
-                        body={"password": password})
-    except HttpError as e:
-        return {"ok": False, "error": "Login failed: %s" % e}
+    login = request("POST", base + "/api/auth/password/login",
+                    body={"password": password})
     token = login.get("token")
     if not token:
-        return {"ok": False, "error": "Login returned no token."}
+        raise ValueError("Login returned no token.")
 
     # 3. Pick the vault (oldest collection).
-    try:
-        coll = request("POST", base + "/api/collections", token=token, body={})
-    except HttpError as e:
-        return {"ok": False, "error": "Could not open vault: %s" % e}
+    coll = request("POST", base + "/api/collections", token=token, body={})
     collection = coll.get("collection") or {}
     collection_id = collection.get("id")
     if not collection_id:
-        return {"ok": False, "error": "Server returned no collection."}
+        raise ValueError("Server returned no collection.")
 
     # 4. Read + unwrap the vault key.
-    try:
-        key_resp = request("GET", base + "/api/collections/%s/key" % collection_id,
-                           token=token)
-    except HttpError as e:
-        return {"ok": False, "error": "Could not read vault key: %s" % e}
+    key_resp = request("GET", base + "/api/collections/%s/key" % collection_id,
+                       token=token)
     key_material = key_resp.get("key")
     if not key_material:
-        return {"ok": False, "error":
-                "This vault has no key yet. Connect the Futo Notes app on a "
-                "device first so it creates the vault key."}
+        raise ValueError(
+            "This vault has no key yet. Connect the Futo Notes app on a "
+            "device first so it creates the vault key."
+        )
 
-    try:
-        vault_key = unwrap_vault_key(key_material, password)
-    except Exception:
-        return {"ok": False, "error": "Wrong sync password (could not decrypt the vault key)."}
+    vault_key = unwrap_vault_key(key_material, password)
+    return token, vault_key, collection_id
+
+
+# --------------------------------------------------------------------------
+# Read: full sync
+# --------------------------------------------------------------------------
+
+def sync(server_url, password):
+    token, vault_key, collection_id = connect(server_url, password)
+    base = server_url.rstrip("/")
 
     # 5. Pull every object.
-    try:
-        objects_resp = request(
-            "GET",
-            base + "/api/collections/%s/objects?sinceVersion=0" % collection_id,
-            token=token,
-        )
-    except HttpError as e:
-        return {"ok": False, "error": "Could not list notes: %s" % e}
+    objects_resp = request(
+        "GET",
+        base + "/api/collections/%s/objects?sinceVersion=0" % collection_id,
+        token=token,
+    )
     objects = objects_resp.get("objects") or []
 
     live = [o for o in objects if not o.get("deleted") and o.get("blob_key")]
@@ -267,12 +285,9 @@ def sync(server_url, password):
     blobs = {}
     for i in range(0, len(keys), 200):
         chunk = keys[i:i + 200]
-        try:
-            raw = request("POST", base + "/api/blobs/batch", token=token,
-                          body={"keys": chunk}, raw=True)
-            blobs.update(parse_blob_batch(raw, chunk))
-        except HttpError as e:
-            return {"ok": False, "error": "Could not download notes: %s" % e}
+        raw = request("POST", base + "/api/blobs/batch", token=token,
+                      body={"keys": chunk}, raw=True)
+        blobs.update(parse_blob_batch(raw, chunk))
 
     # 7. Decrypt each blob into a note.
     notes = []
@@ -296,10 +311,7 @@ def sync(server_url, password):
 
         ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
         is_image = ext in IMAGE_EXTS
-        if is_image:
-            body = ""  # base64 image data; not shown as text
-        else:
-            body = content.decode("utf-8", "replace")
+        body = "" if is_image else content.decode("utf-8", "replace")
 
         notes.append({
             "id": obj.get("id"),
@@ -307,12 +319,61 @@ def sync(server_url, password):
             "title": title_from_path(path),
             "content": body,
             "isImage": is_image,
+            "version": obj.get("version"),
             "updatedAt": obj.get("updated_at"),
         })
 
     notes.sort(key=lambda n: (n.get("updatedAt") or ""), reverse=True)
     return {"ok": True, "notes": notes}
 
+
+# --------------------------------------------------------------------------
+# Write: create / update / delete a note
+# --------------------------------------------------------------------------
+
+def write_note(server_url, password, action, object_id=None, version=None,
+               path="", content=""):
+    """Create, update, or delete an encrypted note.
+
+    action: "create", "update", or "delete"
+    Returns {"ok": True, ...} or raises.
+    """
+    token, vault_key, collection_id = connect(server_url, password)
+    base = server_url.rstrip("/")
+
+    if action == "delete":
+        url = base + "/api/collections/%s/objects/%s" % (collection_id, object_id)
+        if version is not None:
+            url += "?version=" + str(version)
+        request("DELETE", url, token=token)
+        return {"ok": True}
+
+    # create / update: encrypt then write via blob-objects
+    blob = encrypt_note(vault_key, path, content)
+
+    mutation_id = str(uuid.uuid4())
+    extra = {
+        "Content-Type": "application/octet-stream",
+        "Mutation-Id": mutation_id,
+    }
+
+    if action == "create":
+        url = base + "/api/collections/%s/blob-objects" % collection_id
+        resp = request("POST", url, token=token, body=blob,
+                       extra_headers=extra)
+    else:  # update
+        url = base + "/api/collections/%s/blob-objects/%s" % (collection_id, object_id)
+        if version is not None:
+            url += "?version=" + str(version)
+        resp = request("PUT", url, token=token, body=blob,
+                       extra_headers=extra)
+
+    return {"ok": True, "object": resp.get("object", {})}
+
+
+# --------------------------------------------------------------------------
+# main
+# --------------------------------------------------------------------------
 
 def main():
     # Read a single line: QML's Process has no way to close stdin, so we must
@@ -327,6 +388,7 @@ def main():
     server_url = (payload.get("serverUrl") or "").strip().rstrip("/")
     password = payload.get("password") or ""
     save_password = payload.get("savePassword") is True
+    action = payload.get("action") or "sync"
 
     if not server_url:
         print(json.dumps({"ok": False, "error": "No server URL configured."}))
@@ -353,7 +415,22 @@ def main():
         return
 
     try:
-        result = sync(server_url, password)
+        if action == "sync":
+            result = sync(server_url, password)
+        elif action in ("create", "update", "delete"):
+            result = write_note(
+                server_url, password, action,
+                object_id=payload.get("id"),
+                version=payload.get("version"),
+                path=payload.get("path") or "",
+                content=payload.get("content") or "",
+            )
+        else:
+            result = {"ok": False, "error": "unknown action: %s" % action}
+    except HttpError as e:
+        result = {"ok": False, "error": str(e)}
+    except ValueError as e:
+        result = {"ok": False, "error": str(e)}
     except Exception as e:
         result = {"ok": False, "error": "unexpected error: %s" % e}
 
