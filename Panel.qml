@@ -257,6 +257,7 @@ Panel {
   function saveContentBlocks() {
     if (!root.selectedNote) return
     root.editorSaving = true
+    root._skipRefresh = true
     runSync({
       action: "update",
       id: root.selectedNote.id,
@@ -309,13 +310,16 @@ Panel {
         // create / update succeeded
         editorOpen = false
         editingNote = null
-        selectedNote = null
         editorPath = ""
         editorContent = ""
         editorError = ""
         errorMessage = ""
         statusMessage = "Lagret."
-        refresh()
+        if (!root._skipRefresh) {
+          selectedNote = null
+          refresh()
+        }
+        root._skipRefresh = false
       } else {
         // delete succeeded
         editorOpen = false
@@ -927,4 +931,5 @@ Panel {
       }
     }
   }
+}
 }
