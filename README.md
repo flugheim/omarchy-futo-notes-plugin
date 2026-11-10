@@ -1,142 +1,130 @@
-# Futo Notes Plugin for Omarchy
+# Futo Notes for Omarchy
 
-A Omarchy plugin that connects to your self-hosted Futo Notes sync server and displays your encrypted notes in a beautiful panel.
+An Omarchy bar plugin that reads your **end-to-end encrypted** [FUTO Notes](https://notes.futo.tech/)
+from a self-hosted sync server and shows them in a panel.
 
-## Features
+Click the 󰠮 icon in the bar to open the notes panel. The first time you open it,
+enter your sync server URL and sync password; the plugin stores the password in
+your system keyring and decrypts the notes locally.
 
-- 🔐 **End-to-end encrypted** - Notes are decrypted locally using your sync password
-- 📱 **Panel UI** - Click the bar icon to open a slide-out panel with your notes
-- 🔍 **Search & filter** - View notes with tags, folders, and full content
-- ⚙️ **GUI Configuration** - Configure server URL and test connection from the panel
-- 🔄 **Auto-refresh** - Configurable sync interval
+## How it works
 
-## Prerequisites
+FUTO Notes encrypts every note with a 256-bit vault key, and stores only
+ciphertext on the server. Quickshell (the shell Omarchy is built on) has no HTTP
+or crypto API, so the heavy lifting lives in a small Python helper:
 
-- A self-hosted Futo Notes sync server (see [Futo Notes self-hosting docs](https://notes.futo.tech/docs/self-hosting/))
-- Futo Notes app set up on at least one device with notes synced
-- Your sync password (used to decrypt the vault key)
+```
+Panel.qml  ──runs──▶  futo-notes-sync.py  ──HTTPS──▶  your sync server
+   ▲                        │
+   └──── decrypted JSON ◀───┘   (PBKDF2 + AES-256-GCM, in Python)
+```
 
-## Installation
+- `futo-notes-sync.py` — logs in, unwraps the vault key, downloads and decrypts
+  every note, and prints JSON. It also reads/writes the password in the keyring.
+- `Panel.qml` — the panel UI: setup form, notes list, note detail.
+- `BarWidget.qml` — the bar icon and note counter.
+- `NoteRow.qml` — one row in the notes list.
 
-### From GitHub (once published)
+The crypto follows the official
+[FUTO Notes encryption spec](https://notes.futo.tech/docs/encryption/):
+PBKDF2-HMAC-SHA256 (100,000 iterations) to derive a password key, AES-256-GCM to
+unwrap the vault key, then AES-256-GCM to decrypt each blob, whose plaintext is
+a frame of `[version][path length][path][content]`.
+
+## Requirements
+
+- A self-hosted FUTO Notes sync server (see the
+  [self-hosting docs](https://notes.futo.tech/docs/self-hosting/)).
+- FUTO Notes set up on at least one device, with the vault created and notes
+  synced. A vault with no key yet cannot be read.
+- `python3` with the `cryptography` package:
+  ```bash
+  sudo pacman -S python-cryptography
+  ```
+- `secret-tool` (libsecret) for the keyring:
+  ```bash
+  sudo pacman -S libsecret
+  ```
+
+## Install
 
 ```bash
-omarchy plugin add https://github.com/yourusername/omarchy-futo-notes-plugin.git --enable
+omarchy plugin add https://github.com/<you>/omarchy-futo-notes-plugin.git --enable
 ```
 
-### Local Development
+Or from a local checkout:
 
 ```bash
-# Clone or copy this directory to your plugins folder
-cp -r omarchy-futo-notes-plugin ~/.config/omarchy/plugins/futo-notes
-
-# Validate the plugin
-omarchy plugin validate ~/.config/omarchy/plugins/futo-notes
-
-# Enable it
-omarchy plugin enable futo-notes
+omarchy plugin add /path/to/omarchy-futo-notes-plugin --enable
 ```
 
-## Configuration
-
-1. **Right-click** the Futo Notes icon in the bar (or click "Settings" in the panel)
-2. Enter your **Sync Server URL** (e.g., `https://notes.example.com`)
-3. Click **Test Connection** to verify
-4. Click **Save & Sync**
-5. Enter your **Sync Password** when prompted in the panel
-6. Your notes will appear!
-
-## Usage
-
-- **Left-click** the bar icon → Open/close notes panel
-- **Middle-click** → Force sync
-- **Right-click** → Open settings
-- In the panel: Click a note to view its full content
-- Tags and folders are displayed for each note
-
-## Security
-
-- Your sync password is **never stored** - only kept in memory during the session
-- The vault key is derived from your password using PBKDF2-SHA256 (100,000 iterations)
-- Each note is decrypted using a per-object key derived via HKDF
-- All crypto operations happen locally in the plugin
-
-## Development
-
-### Plugin Structure
-
-```
-omarchy-futo-notes-plugin/
-├── manifest.json          # Plugin metadata
-├── Model.js               # API client & note model
-├── FutoCrypto.js          # E2EE decryption implementation
-├── BarWidget.qml          # Bar icon widget
-├── Panel.qml              # Notes panel UI
-└── futoNotesSettings.qml  # Settings form for Omarchy menu
-```
-
-### Key Components
-
-- **Model.js** - Handles HTTP communication with the Futo Notes sync server API
-- **FutoCrypto.js** - Implements the Futo Notes encryption specification (PBKDF2, HKDF, AES-GCM)
-- **BarWidget.qml** - Shows note count in the bar, opens panel on click
-- **Panel.qml** - Full notes UI with list view, detail view, and settings
-
-### Testing Changes
+Then make sure the widget is in your bar (`~/.config/omarchy/shell.json`) and
+restart the shell:
 
 ```bash
-# After making changes, rescan plugins
-omarchy-shell shell rescanPlugins
-
-# Or restart the shell
 omarchy-restart-shell
 ```
 
-## Sharing with Community
+## Use
 
-1. **Push to GitHub**:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial Futo Notes plugin"
-   git remote add origin https://github.com/yourusername/omarchy-futo-notes-plugin.git
-   git push -u origin main
-   ```
+1. Click the 󰠮 icon in the bar.
+2. Enter your **sync server URL** (e.g. `https://notes.example.com`) and your
+   **sync password**. Use **Test connection** to check them first.
+3. Click **Connect & sync**. The password is saved to the keyring and your notes
+   appear.
+4. Click any note to read it. **Refresh** re-syncs. **Log out** clears the saved
+   password and settings.
 
-2. **Submit to Omarchy plugin catalog** (when available) or share the GitHub URL
+Bar interactions:
 
-3. **Users install with**:
-   ```bash
-   omarchy plugin add https://github.com/yourusername/omarchy-futo-notes-plugin.git --enable
-   ```
+- **Left click** — open/close the panel
+- **Middle click** — re-sync
+- **Right click** — open the panel at its settings
+
+## Security notes
+
+- The password is stored in the system keyring via `secret-tool`, never in a
+  plain file. The server URL and cached note count live in
+  `~/.local/state/omarchy/settings/futo-notes.json`.
+- Decryption happens locally. The server only ever sees ciphertext.
+- As the FUTO Notes docs explain, the sync password is also the login password,
+  so whoever runs the server can read requests to it. Self-host it somewhere you
+  trust.
 
 ## Troubleshooting
 
-### "Failed to decrypt vault key"
-- Wrong password entered
-- The vault hasn't been initialized on another device yet
-- Server URL points to wrong server
+| Message | Meaning |
+| --- | --- |
+| `Cannot reach server` | Wrong URL, or the server is down/unreachable. |
+| `That URL does not look like a Futo Notes server` | The `/` endpoint did not return `{"name":"futo-notes",…}`. |
+| `Wrong sync password` | The vault key could not be decrypted — check the password. |
+| `This vault has no key yet` | Connect the FUTO Notes app on a device first so it creates the vault key. |
+| `No password saved` | Open settings and enter the password. |
 
-### "No vault key material found"
-- First device to sync needs to "claim" the vault in the Futo Notes app settings
-- Check that sync is working on your phone/computer first
+If the helper reports a missing package, install `python-cryptography`.
 
-### Notes not appearing
-- Check that notes are synced to the server from another device
-- Try middle-clicking the bar icon to force refresh
-- Check the panel error message for details
+## Development
 
-### Connection failed
-- Verify server URL is correct (include `https://`)
-- Check server is accessible from your network
-- Verify the server's `/` endpoint returns `{"name": "futo-notes", ...}`
+Validate a checkout before installing:
+
+```bash
+omarchy plugin validate ./omarchy-futo-notes-plugin
+```
+
+After editing, copy the files into `~/.config/omarchy/plugins/futo-notes/` and
+run `omarchy-restart-shell`, then check the log:
+
+```bash
+journalctl --user -n 100 --no-pager | grep futo-notes
+```
+
+The sync helper can be tested on its own; it reads one JSON line on stdin:
+
+```bash
+echo '{"serverUrl":"https://notes.example.com","password":"…"}' | \
+  python3 futo-notes-sync.py
+```
 
 ## License
 
-MIT License - Feel free to use, modify, and distribute.
-
-## Credits
-
-- Built for [Omarchy](https://omarchy.org/)
-- Integrates with [Futo Notes](https://notes.futo.tech/) sync server
-- Uses Quickshell for the UI framework
+MIT.

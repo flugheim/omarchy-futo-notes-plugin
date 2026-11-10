@@ -4,18 +4,16 @@
   "name": "Futo Notes",
   "version": "1.0.0",
   "author": "Kenneth Flugheim",
-  "description": "View your Futo Notes synced via self-hosted server",
+  "description": "Read your end-to-end encrypted Futo Notes from a self-hosted sync server",
   "kinds": [
-    "bar-widget",
-    "panel"
+    "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml",
-    "panel": "Panel.qml"
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "Futo Notes",
-    "description": "Shows note count and opens notes panel",
+    "description": "Shows note count and opens the notes panel",
     "category": "Info",
     "allowMultiple": false
   }
