@@ -79,13 +79,12 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󰠮"
-    labelText: root.noteCount > 0 ? String(root.noteCount) : ""
+    labelText: ""
     slotSize: Style.bar.statusSlot
     tooltipText: root.configured
-      ? (root.noteCount > 0 ? (root.noteCount + " note" + (root.noteCount === 1 ? "" : "s")) : "No notes synced")
-        + (root.lastSyncText ? " · synced " + root.lastSyncText : "")
+      ? (root.lastSyncText ? "Synkert " + root.lastSyncText : "Ingen notater synkret")
         + (root.lastError ? " · " + root.lastError : "")
-      : "Futo Notes — click to set up"
+      : "Futo Notes — klikk for å sette opp"
 
     onPressed: function(b) {
       if (!root.bar) return
