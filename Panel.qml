@@ -40,6 +40,20 @@ Panel {
   property string editorContent: ""
   property string editorError: ""
 
+  // Detail view: parsed content blocks for checkbox rendering
+  property var contentBlocks: []
+  property bool contentDirty: false
+  property var selectedNote: null
+
+  onSelectedNoteChanged: {
+    if (root.selectedNote) {
+      root.loadContentBlocks()
+    } else {
+      root.contentBlocks = []
+      root.contentDirty = false
+    }
+  }
+
   // Settings form buffers
   property string formUrl: ""
   property string formPassword: ""
@@ -163,6 +177,100 @@ Panel {
     })
   }
 
+  // ---------------------------------------------------------------- content blocks (checkbox support)
+
+  function parseContentBlocks(content) {
+    var TASK_RE = /^(\s*)- \[([ x])\] (.*)$/
+    var blocks = []
+    var lines = String(content || "").split("\n")
+    var currentText = ""
+    var currentTasks = null
+
+    function flushText() {
+      if (currentText !== "") {
+        blocks.push({ type: "text", text: currentText })
+        currentText = ""
+      }
+    }
+    function flushTasks() {
+      if (currentTasks && currentTasks.items.length > 0) {
+        blocks.push(currentTasks)
+      }
+      currentTasks = null
+    }
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i]
+      var m = line.match(TASK_RE)
+      if (m) {
+        flushText()
+        if (!currentTasks) currentTasks = { type: "tasks", items: [] }
+        currentTasks.items.push({
+          checked: m[2] === "x",
+          text: m[3],
+          indent: m[1],
+        })
+      } else {
+        flushTasks()
+        currentText += line + "\n"
+      }
+    }
+    flushText()
+    flushTasks()
+    return blocks
+  }
+
+  function serializeBlocks(blocks) {
+    var out = ""
+    for (var i = 0; i < blocks.length; i++) {
+      var b = blocks[i]
+      if (b.type === "text") {
+        out += b.text
+        if (!b.text.endsWith("\n")) out += "\n"
+      } else if (b.type === "tasks") {
+        for (var j = 0; j < b.items.length; j++) {
+          var it = b.items[j]
+          var marker = it.checked ? "[x]" : "[ ]"
+          out += it.indent + "- " + marker + " " + it.text + "\n"
+        }
+      }
+    }
+    return out
+  }
+
+  function loadContentBlocks() {
+    if (!root.selectedNote) { root.contentBlocks = []; return }
+    root.contentBlocks = parseContentBlocks(root.selectedNote.content || "")
+    root.contentDirty = false
+  }
+
+  function toggleTask(blockIdx, itemIdx) {
+    if (!root.contentBlocks || blockIdx < 0 || blockIdx >= root.contentBlocks.length) return
+    var b = root.contentBlocks[blockIdx]
+    if (b.type !== "tasks" || itemIdx < 0 || itemIdx >= b.items.length) return
+    var it = b.items[itemIdx]
+    it.checked = !it.checked
+    root.contentDirty = true
+    var newContent = serializeBlocks(root.contentBlocks)
+    root.selectedNote.content = newContent
+    // Auto-save after a short delay so rapid toggles batch into one call
+    if (root._saveTimer) root._saveTimer.stop()
+    root._saveTimer = Qt.callLater(function() { root.saveContentBlocks() })
+  }
+
+  function saveContentBlocks() {
+    if (!root.selectedNote || !root.contentDirty) return
+    root.contentDirty = false
+    root.editorSaving = true
+    runSync({
+      action: "update",
+      id: root.selectedNote.id,
+      version: Number(root.selectedNote.version || 0) + 1,
+      path: root.selectedNote.path,
+      content: root.selectedNote.content,
+    })
+  }
+
   // ---------------------------------------------------------------- sync
   property string pendingPayload: ""
 
@@ -194,6 +302,7 @@ Panel {
         notes = res.notes || []
         editorOpen = false
         editingNote = null
+        selectedNote = null
         errorMessage = ""
         settings = Object.assign({}, settings, {
           lastCount: notes.length,
@@ -205,6 +314,7 @@ Panel {
         // create / update succeeded
         editorOpen = false
         editingNote = null
+        selectedNote = null
         editorPath = ""
         editorContent = ""
         editorError = ""
@@ -215,6 +325,7 @@ Panel {
         // delete succeeded
         editorOpen = false
         editingNote = null
+        selectedNote = null
         editorPath = ""
         editorContent = ""
         editorError = ""
@@ -416,7 +527,7 @@ Panel {
 
           // ---------------- Settings form ----------------
           Column {
-            visible: root.showSettings || !root.configured
+            visible: root.showSettings || (!root.configured && !root.selectedNote)
             width: parent.width
             spacing: Style.space(12)
 
@@ -618,9 +729,150 @@ Panel {
             }
           }
 
+          // ---------------- Note detail (view mode with checkboxes) ----------------
+          Column {
+            visible: root.selectedNote !== null && !root.editorOpen && !root.showSettings
+            width: parent.width
+            spacing: Style.space(12)
+
+            Rectangle {
+              width: parent.width
+              height: Style.spacing.hairline
+              color: root.bar.foreground
+              opacity: 0.12
+            }
+
+            Row {
+              spacing: Style.space(8)
+              Button {
+                text: "Tilbake"
+                foreground: root.bar.foreground
+                background: "transparent"
+                onClicked: root.selectedNote = null
+              }
+              Text {
+                text: root.selectedNote ? root.selectedNote.title : ""
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+              }
+              Text {
+                visible: root.selectedNote && root.selectedNote.path
+                text: root.selectedNote ? root.selectedNote.path : ""
+                color: Qt.darker(root.bar.foreground, 1.5)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            Flickable {
+              width: parent.width
+              height: Math.min(detailContent.implicitHeight + Style.space(20), Style.space(500))
+              clip: true
+              contentWidth: width
+              contentHeight: detailContent.implicitHeight + Style.space(20)
+              boundsBehavior: Flickable.StopAtBounds
+              interactive: contentHeight > height
+
+              Column {
+                id: detailContent
+                width: parent.width - Style.space(8)
+                spacing: Style.space(8)
+
+                Repeater {
+                  model: root.contentBlocks
+                  delegate: Item {
+                    width: parent.width
+                    implicitHeight: blockType === "tasks" ? taskColumn.implicitHeight : textItem.implicitHeight + Style.space(8)
+                    property string blockType: modelData.type
+
+                    Column {
+                      id: blockCol
+                      width: parent.width
+                      spacing: 0
+                      visible: true
+
+                      // Regular text paragraph
+                      Text {
+                        id: textItem
+                        visible: blockType === "text"
+                        text: modelData.text
+                        color: root.bar.foreground
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.body
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                      }
+
+                      // Task list with checkboxes
+                      Column {
+                        id: taskColumn
+                        visible: blockType === "tasks"
+                        spacing: Style.space(4)
+
+                        Repeater {
+                          model: modelData.items
+                          delegate: Row {
+                            spacing: Style.space(8)
+                            width: parent.width
+
+                            CheckBox {
+                              checked: modelData.checked
+                              onCheckedChanged: root.toggleTask(repeater.model.index, index)
+                              width: Style.space(24)
+                              height: Style.space(24)
+                            }
+
+                            Text {
+                              text: modelData.text
+                              color: modelData.checked ? Qt.darker(root.bar.foreground, 1.8) : root.bar.foreground
+                              font.family: root.bar.fontFamily
+                              font.pixelSize: Style.font.body
+                              wrapMode: Text.WordWrap
+                              width: parent.width - Style.space(32)
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
+                Text {
+                  visible: root.contentDirty
+                  text: "Lagrer avkrysninger…"
+                  color: Qt.darker(root.bar.foreground, 1.6)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+
+            Row {
+              spacing: Style.space(8)
+              Button {
+                text: "Rediger"
+                enabled: !root.editorSaving
+                foreground: root.bar.background
+                background: Commons.Color.accent
+                onClicked: root.editNote(root.selectedNote)
+              }
+              Button {
+                text: "Slett"
+                enabled: !root.editorSaving
+                foreground: "#f38ba8"
+                background: "transparent"
+                onClicked: root.deleteNote()
+              }
+            }
+          }
+
           // ---------------- Notes list ----------------
           Column {
-            visible: root.configured && !root.showSettings && !root.editorOpen
+            visible: root.configured && !root.showSettings && !root.editorOpen && !root.selectedNote
             width: parent.width
             spacing: Style.space(8)
 
@@ -679,8 +931,8 @@ Panel {
                   isImage: modelData.isImage === true
                   foreground: root.bar.foreground
                   fontFamily: root.bar.fontFamily
-                  selected: root.editingNote && root.editingNote.id === modelData.id
-                  onActivated: root.editNote(modelData)
+                  selected: root.selectedNote && root.selectedNote.id === modelData.id
+                  onActivated: root.selectedNote = modelData
                 }
               }
               Item {
