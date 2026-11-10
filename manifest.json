@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "futo-notes",
+  "name": "Futo Notes",
+  "version": "1.0.0",
+  "author": "Kenneth Flugheim",
+  "description": "View your Futo Notes synced via self-hosted server",
+  "kinds": [
+    "bar-widget",
+    "panel"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Futo Notes",
+    "description": "Shows note count and opens notes panel",
+    "category": "Info",
+    "allowMultiple": false
+  }
+}
