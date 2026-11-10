@@ -786,54 +786,44 @@ Panel {
                   model: root.contentBlocks
                   delegate: Item {
                     width: parent.width
-                    implicitHeight: blockType === "tasks" ? taskColumn.implicitHeight : textItem.implicitHeight + Style.space(8)
-                    property string blockType: modelData.type
 
-                    Column {
-                      id: blockCol
+                    // Text paragraph block
+                    Text {
+                      visible: modelData.type === "text"
+                      text: modelData.text
+                      color: root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.body
+                      wrapMode: Text.WordWrap
                       width: parent.width
-                      spacing: 0
-                      visible: true
+                    }
 
-                      // Regular text paragraph
-                      Text {
-                        id: textItem
-                        visible: blockType === "text"
-                        text: modelData.text
-                        color: root.bar.foreground
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.body
-                        wrapMode: Text.WordWrap
-                        width: parent.width
-                      }
+                    // Task block with checkboxes
+                    Column {
+                      visible: modelData.type === "tasks"
+                      width: parent.width
+                      spacing: Style.space(4)
 
-                      // Task list with checkboxes
-                      Column {
-                        id: taskColumn
-                        visible: blockType === "tasks"
-                        spacing: Style.space(4)
+                      Repeater {
+                        model: modelData.items
+                        delegate: Row {
+                          spacing: Style.space(8)
+                          width: parent.width
 
-                        Repeater {
-                          model: modelData.items
-                          delegate: Row {
-                            spacing: Style.space(8)
-                            width: parent.width
+                          CheckBox {
+                            checked: modelData.checked
+                            onCheckedChanged: root.toggleTask(repeater.model.index, index)
+                            width: Style.space(24)
+                            height: Style.space(24)
+                          }
 
-                            CheckBox {
-                              checked: modelData.checked
-                              onCheckedChanged: root.toggleTask(repeater.model.index, index)
-                              width: Style.space(24)
-                              height: Style.space(24)
-                            }
-
-                            Text {
-                              text: modelData.text
-                              color: modelData.checked ? Qt.darker(root.bar.foreground, 1.8) : root.bar.foreground
-                              font.family: root.bar.fontFamily
-                              font.pixelSize: Style.font.body
-                              wrapMode: Text.WordWrap
-                              width: parent.width - Style.space(32)
-                            }
+                          Text {
+                            text: modelData.text
+                            color: modelData.checked ? Qt.darker(root.bar.foreground, 1.8) : root.bar.foreground
+                            font.family: root.bar.fontFamily
+                            font.pixelSize: Style.font.body
+                            wrapMode: Text.WordWrap
+                            width: parent.width - Style.space(32)
                           }
                         }
                       }
