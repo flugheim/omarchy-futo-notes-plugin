@@ -40,19 +40,8 @@ Panel {
   property string editorContent: ""
   property string editorError: ""
 
-  // Detail view: parsed content blocks for checkbox rendering
-  property var contentBlocks: []
-  property bool contentDirty: false
+  // Detail view state
   property var selectedNote: null
-
-  onSelectedNoteChanged: {
-    if (root.selectedNote) {
-      root.loadContentBlocks()
-    } else {
-      root.contentBlocks = []
-      root.contentDirty = false
-    }
-  }
 
   // Settings form buffers
   property string formUrl: ""
@@ -174,100 +163,6 @@ Panel {
       action: "delete",
       id: editingNote.id,
       version: Number(editingNote.version || 0),
-    })
-  }
-
-  // ---------------------------------------------------------------- content blocks (checkbox support)
-
-  function parseContentBlocks(content) {
-    var TASK_RE = /^(\s*)- \[([ x])\] (.*)$/
-    var blocks = []
-    var lines = String(content || "").split("\n")
-    var currentText = ""
-    var currentTasks = null
-
-    function flushText() {
-      if (currentText !== "") {
-        blocks.push({ type: "text", text: currentText })
-        currentText = ""
-      }
-    }
-    function flushTasks() {
-      if (currentTasks && currentTasks.items.length > 0) {
-        blocks.push(currentTasks)
-      }
-      currentTasks = null
-    }
-
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i]
-      var m = line.match(TASK_RE)
-      if (m) {
-        flushText()
-        if (!currentTasks) currentTasks = { type: "tasks", items: [] }
-        currentTasks.items.push({
-          checked: m[2] === "x",
-          text: m[3],
-          indent: m[1],
-        })
-      } else {
-        flushTasks()
-        currentText += line + "\n"
-      }
-    }
-    flushText()
-    flushTasks()
-    return blocks
-  }
-
-  function serializeBlocks(blocks) {
-    var out = ""
-    for (var i = 0; i < blocks.length; i++) {
-      var b = blocks[i]
-      if (b.type === "text") {
-        out += b.text
-        if (!b.text.endsWith("\n")) out += "\n"
-      } else if (b.type === "tasks") {
-        for (var j = 0; j < b.items.length; j++) {
-          var it = b.items[j]
-          var marker = it.checked ? "[x]" : "[ ]"
-          out += it.indent + "- " + marker + " " + it.text + "\n"
-        }
-      }
-    }
-    return out
-  }
-
-  function loadContentBlocks() {
-    if (!root.selectedNote) { root.contentBlocks = []; return }
-    root.contentBlocks = parseContentBlocks(root.selectedNote.content || "")
-    root.contentDirty = false
-  }
-
-  function toggleTask(blockIdx, itemIdx) {
-    if (!root.contentBlocks || blockIdx < 0 || blockIdx >= root.contentBlocks.length) return
-    var b = root.contentBlocks[blockIdx]
-    if (b.type !== "tasks" || itemIdx < 0 || itemIdx >= b.items.length) return
-    var it = b.items[itemIdx]
-    it.checked = !it.checked
-    root.contentDirty = true
-    var newContent = serializeBlocks(root.contentBlocks)
-    root.selectedNote.content = newContent
-    // Auto-save after a short delay so rapid toggles batch into one call
-    if (root._saveTimer) root._saveTimer.stop()
-    root._saveTimer = Qt.callLater(function() { root.saveContentBlocks() })
-  }
-
-  function saveContentBlocks() {
-    if (!root.selectedNote || !root.contentDirty) return
-    root.contentDirty = false
-    root.editorSaving = true
-    runSync({
-      action: "update",
-      id: root.selectedNote.id,
-      version: Number(root.selectedNote.version || 0) + 1,
-      path: root.selectedNote.path,
-      content: root.selectedNote.content,
     })
   }
 
@@ -729,7 +624,7 @@ Panel {
             }
           }
 
-          // ---------------- Note detail (view mode with checkboxes) ----------------
+          // ---------------- Note detail (view mode) ----------------
           Column {
             visible: root.selectedNote !== null && !root.editorOpen && !root.showSettings
             width: parent.width
@@ -768,76 +663,17 @@ Panel {
               }
             }
 
-            Flickable {
+            Column {
               width: parent.width
-              height: Math.min(detailContent.implicitHeight + Style.space(20), Style.space(500))
-              clip: true
-              contentWidth: width
-              contentHeight: detailContent.implicitHeight + Style.space(20)
-              boundsBehavior: Flickable.StopAtBounds
-              interactive: contentHeight > height
+              spacing: Style.space(8)
 
-              Column {
-                id: detailContent
+              Text {
                 width: parent.width - Style.space(8)
-                spacing: Style.space(8)
-
-                Repeater {
-                  model: root.contentBlocks
-                  delegate: Item {
-                    width: parent.width
-
-                    // Text paragraph block
-                    Text {
-                      visible: modelData.type === "text"
-                      text: modelData.text
-                      color: root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.body
-                      wrapMode: Text.WordWrap
-                      width: parent.width
-                    }
-
-                    // Task block with checkboxes
-                    Column {
-                      visible: modelData.type === "tasks"
-                      width: parent.width
-                      spacing: Style.space(4)
-
-                      Repeater {
-                        model: modelData.items
-                        delegate: Row {
-                          spacing: Style.space(8)
-                          width: parent.width
-
-                          CheckBox {
-                            checked: modelData.checked
-                            onCheckedChanged: root.toggleTask(repeater.model.index, index)
-                            width: Style.space(24)
-                            height: Style.space(24)
-                          }
-
-                          Text {
-                            text: modelData.text
-                            color: modelData.checked ? Qt.darker(root.bar.foreground, 1.8) : root.bar.foreground
-                            font.family: root.bar.fontFamily
-                            font.pixelSize: Style.font.body
-                            wrapMode: Text.WordWrap
-                            width: parent.width - Style.space(32)
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-
-                Text {
-                  visible: root.contentDirty
-                  text: "Lagrer avkrysninger…"
-                  color: Qt.darker(root.bar.foreground, 1.6)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
+                text: root.selectedNote ? root.selectedNote.content : ""
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
               }
             }
 
