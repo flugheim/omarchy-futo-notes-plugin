@@ -69,17 +69,33 @@ omarchy-restart-shell
 
 1. Click the 󰠮 icon in the bar.
 2. Enter your **sync server URL** (e.g. `https://notes.example.com`) and your
-   **sync password**. Use **Test connection** to check them first.
-3. Click **Connect & sync**. The password is saved to the keyring and your notes
-   appear.
-4. Click any note to read it. **Refresh** re-syncs. **Log out** clears the saved
-   password and settings.
+   **sync password**. Use the 󰖟 (test connection) button to check them first.
+3. Click **Connect & sync** (󰓦). The password is saved to the keyring and your
+   notes appear.
+4. Click any note to read it.
+
+Actions are icon buttons in the panel header, in the note detail view and in the
+editor. Hover an icon to see what it does:
+
+| Icon | Action |
+| --- | --- |
+| 󰑐 | Refresh — re-sync from the server |
+| 󰐕 | New note |
+| 󰒓 | Settings (󰅖 closes them) |
+| 󰁍 | Back to the notes list |
+| 󰏫 | Edit the open note |
+| 󰆴 | Delete the open note |
+| 󰄬 | Save the note |
+| 󰅖 | Cancel editing |
+| 󰓦 | Connect & sync |
+| 󰖟 | Test connection |
+| 󰍃 | Log out — clears the saved password and settings |
 
 Bar interactions:
 
 - **Left click** — open/close the panel
 - **Middle click** — re-sync
-- **Right click** — open the panel at its settings
+- **Right click** — open/close the panel
 
 ## Security notes
 

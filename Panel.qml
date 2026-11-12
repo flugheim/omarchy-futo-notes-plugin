@@ -32,6 +32,8 @@ Panel {
   property string errorMessage: ""
   property string statusMessage: ""
   property bool showSettings: false
+  // Set while a checkbox toggle saves, so the result does not leave the note.
+  property bool skipRefresh: false
 
   // Editor (popup) state
   property bool editorOpen: false
@@ -156,7 +158,7 @@ Panel {
 
   function saveNote() {
     var path = String(editorPath || "").trim()
-    if (!path) { editorError = "Gi notatet et navn (f.eks. Notat.md)"; return }
+    if (!path) { editorError = "Give the note a name (e.g. Note.md)"; return }
     if (!path.toLowerCase().endsWith(".md")) path += ".md"
 
     editorError = ""
@@ -182,13 +184,15 @@ Panel {
   }
 
   function deleteNote() {
-    if (!editingNote) return
+    // Works from both the editor and the note detail view.
+    var note = editingNote || selectedNote
+    if (!note) return
     editorError = ""
     editorSaving = true
     runSync({
       action: "delete",
-      id: editingNote.id,
-      version: Number(editingNote.version || 0),
+      id: note.id,
+      version: Number(note.version || 0),
     })
   }
 
@@ -266,15 +270,21 @@ Panel {
     it.checked = !it.checked
     var newContent = serializeBlocks(root.contentBlocks)
     root.selectedNote.content = newContent
-    // Auto-save after a short delay so rapid toggles batch into one call
-    if (root._saveTimer) root._saveTimer.stop()
-    root._saveTimer = Qt.callLater(function() { root.saveContentBlocks() })
+    // Auto-save after a short delay so rapid toggles batch into one call.
+    saveTimer.restart()
+  }
+
+  Timer {
+    id: saveTimer
+    interval: 400
+    repeat: false
+    onTriggered: root.saveContentBlocks()
   }
 
   function saveContentBlocks() {
     if (!root.selectedNote) return
     root.editorSaving = true
-    root._skipRefresh = true
+    root.skipRefresh = true
     runSync({
       action: "update",
       id: root.selectedNote.id,
@@ -286,11 +296,37 @@ Panel {
 
   // ---------------------------------------------------------------- sync
   property string pendingPayload: ""
+  // A request that arrived while the helper was still running. The helper
+  // handles exactly one request per run, so it has to wait for the next one.
+  property var queuedPayload: null
 
   function runSync(payload) {
-    pendingPayload = JSON.stringify(payload) + "\n"
+    // Every request needs the server URL; write actions don't repeat it.
+    var request = Object.assign({}, payload)
+    if (!request.serverUrl && root.settings.serverUrl)
+      request.serverUrl = String(root.settings.serverUrl)
+    if (syncProc.running) {
+      queuedPayload = request
+      return
+    }
+    queuedPayload = null
+    pendingPayload = JSON.stringify(request) + "\n"
     loading = true
     syncProc.running = true
+  }
+
+  function runQueuedPayload() {
+    if (syncProc.running || queuedPayload === null) return
+    var payload = queuedPayload
+    queuedPayload = null
+    runSync(payload)
+  }
+
+  Timer {
+    interval: 150
+    repeat: false
+    running: root.queuedPayload !== null && !syncProc.running
+    onTriggered: root.runQueuedPayload()
   }
 
   function refresh() {
@@ -331,12 +367,12 @@ Panel {
         editorContent = ""
         editorError = ""
         errorMessage = ""
-        statusMessage = "Lagret."
-        if (!root._skipRefresh) {
+        statusMessage = "Saved."
+        if (!root.skipRefresh) {
           selectedNote = null
           refresh()
         }
-        root._skipRefresh = false
+        root.skipRefresh = false
       } else {
         // delete succeeded
         editorOpen = false
@@ -346,15 +382,16 @@ Panel {
         editorContent = ""
         editorError = ""
         errorMessage = ""
-        statusMessage = "Slettet."
+        statusMessage = "Deleted."
         refresh()
       }
     } else {
+      root.skipRefresh = false
       if (editorOpen) {
-        editorError = res.error || "Lagring mislyktes."
+        editorError = res.error || "Saving failed."
         editorSaving = false
       } else {
-        errorMessage = res.error || "Sync feilet."
+        errorMessage = res.error || "Sync failed."
         if (String(errorMessage).indexOf("No password saved") !== -1) passwordStored = false
         settings = Object.assign({}, settings, { lastError: errorMessage })
         persistSettings()
@@ -365,8 +402,8 @@ Panel {
   // ---------------------------------------------------------------- settings actions
   function connectAndSync() {
     var url = String(formUrl || "").trim().replace(/\/+$/, "")
-    if (!url) { errorMessage = "Oppgi synk-server-URL."; return }
-    if (!formPassword && !passwordStored) { errorMessage = "Oppgi synk-passordet."; return }
+    if (!url) { errorMessage = "Enter the sync server URL."; return }
+    if (!formPassword && !passwordStored) { errorMessage = "Enter the sync password."; return }
 
     errorMessage = ""
     statusMessage = ""
@@ -404,11 +441,11 @@ Panel {
 
   function testConnection() {
     var url = String(formUrl || "").trim().replace(/\/+$/, "")
-    if (!url) { errorMessage = "Oppgi synk-server-URL."; return }
-    if (!formPassword && !passwordStored) { errorMessage = "Oppgi synk-passordet."; return }
+    if (!url) { errorMessage = "Enter the sync server URL."; return }
+    if (!formPassword && !passwordStored) { errorMessage = "Enter the sync password."; return }
 
     errorMessage = ""
-    statusMessage = "Tester…"
+    statusMessage = "Testing…"
     loading = true
     testPayload = JSON.stringify({ serverUrl: url, password: formPassword }) + "\n"
     testProc.running = true
@@ -461,7 +498,7 @@ Panel {
         root.loading = false
         root.editorSaving = false
         if (root.errorMessage === "" && root.editorError === "")
-          root.errorMessage = "Synk-hjelperen avslutet med kode " + code + "."
+          root.errorMessage = "The sync helper exited with code " + code + "."
       }
     }
   }
@@ -480,9 +517,9 @@ Panel {
         try { res = JSON.parse(String(text || "").trim() || "{}") } catch (e) {}
         
         if (res.ok)
-          root.statusMessage = "Koblet — funnet " + (res.notes ? res.notes.length : 0) + " notat(er)."
+          root.statusMessage = "Connected — found " + (res.notes ? res.notes.length : 0) + " note(s)."
         else
-          root.errorMessage = res.error || "Koblingstest feilet."
+          root.errorMessage = res.error || "Connection test failed."
       }
     }
     stderr: StdioCollector { waitForEnd: true }
@@ -538,18 +575,29 @@ Panel {
           spacing: Style.space(16)
 
           // ---------------- Header ----------------
-          Row {
+          Item {
             width: parent.width
-            spacing: Style.space(12)
+            implicitHeight: Math.max(headerIcon.implicitHeight, headerLabels.implicitHeight, headerActions.implicitHeight)
 
             Text {
+              id: headerIcon
               text: "󰠮"
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.displayLarge
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
             }
+
             Column {
+              id: headerLabels
+              anchors.left: headerIcon.right
+              anchors.leftMargin: Style.space(12)
+              anchors.right: headerActions.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(2)
+
               Text {
                 text: "Futo Notes"
                 color: root.bar.foreground
@@ -558,12 +606,49 @@ Panel {
                 font.bold: true
               }
               Text {
+                width: parent.width
+                elide: Text.ElideRight
                 text: root.configured
                   ? String(root.settings.serverUrl).replace(/^https?:\/\//, "")
-                  : "Ikke konfigurert"
+                  : "Not configured"
                 color: Qt.darker(root.bar.foreground, 1.5)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
+              }
+            }
+
+            Row {
+              id: headerActions
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              PanelActionButton {
+                visible: root.configured && root.view !== "editor"
+                iconText: "󰑐"
+                tooltipText: "Refresh"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.refresh()
+              }
+              PanelActionButton {
+                visible: root.configured && root.view !== "editor"
+                iconText: "󰐕"
+                tooltipText: "New note"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: root.newNote()
+              }
+              PanelActionButton {
+                visible: root.configured && root.view !== "editor"
+                iconText: root.view === "settings" ? "󰅖" : "󰒓"
+                tooltipText: root.view === "settings" ? "Close settings" : "Settings"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                onClicked: {
+                  if (root.view === "settings") root.showSettings = false
+                  else root.showSettings = true
+                }
               }
             }
           }
@@ -583,7 +668,7 @@ Panel {
             }
 
             Text {
-              text: root.configured ? "Innstillinger" : "Sett opp Futo Notes-synk"
+              text: root.configured ? "Settings" : "Set up Futo Notes sync"
               color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.body
@@ -594,7 +679,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
               Text {
-                text: "Synk-server-URL"
+                text: "Sync server URL"
                 color: Qt.darker(root.bar.foreground, 1.3)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -612,7 +697,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
               Text {
-                text: "Synk-passord"
+                text: "Sync password"
                 color: Qt.darker(root.bar.foreground, 1.3)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -620,21 +705,21 @@ Panel {
               TextField {
                 width: parent.width
                 text: root.formPassword
-                placeholderText: "Passordet som dekrypterer notatene dine"
+                placeholderText: "The password that decrypts your notes"
                 foreground: root.bar.foreground
                 password: true
                 onTextChanged: root.formPassword = text
               }
               Text {
                 visible: root.passwordStored && root.formPassword === ""
-                text: "Et passord er allerede lagret i systemnøkkelringen."
+                text: "A password is already stored in the system keyring."
                 color: "#a6e3a1"
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
               }
               Text {
-                text: "Lagres i systemnøkkelringen (secret-tool), aldri i en fil."
+                text: "Stored in the system keyring (secret-tool), never in a file."
                 color: Qt.darker(root.bar.foreground, 1.6)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -645,7 +730,7 @@ Panel {
             Text {
               visible: root.errorMessage !== ""
               text: root.errorMessage
-              color: "#f38ba8"
+              color: Commons.Color.urgent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
@@ -659,29 +744,46 @@ Panel {
               wrapMode: Text.WordWrap
             }
 
-            Row {
-              spacing: Style.space(8)
+            Item {
+              width: parent.width
+              height: Math.max(connectButton.implicitHeight, settingsActions.implicitHeight)
+
               Button {
-                text: root.loading ? "Arbeider…" : "Koble til & synk"
+                id: connectButton
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰓦"
+                text: root.loading ? "Working…" : "Connect & sync"
                 enabled: !root.loading && !root.savingPassword
                 foreground: root.bar.background
                 background: Commons.Color.accent
+                fontFamily: root.bar.fontFamily
                 onClicked: root.connectAndSync()
               }
-              Button {
-                text: "Test tilkobling"
-                enabled: !root.loading
-                foreground: root.bar.foreground
-                background: "transparent"
-                onClicked: root.testConnection()
-              }
-              Button {
-                visible: root.configured
-                text: "Logg ut"
-                enabled: !root.loading
-                foreground: root.bar.foreground
-                background: "transparent"
-                onClicked: root.logout()
+
+              Row {
+                id: settingsActions
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                PanelActionButton {
+                  iconText: "󰖟"
+                  tooltipText: "Test connection"
+                  enabled: !root.loading
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.testConnection()
+                }
+                PanelActionButton {
+                  visible: root.configured
+                  iconText: "󰍃"
+                  tooltipText: "Log out"
+                  enabled: !root.loading
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.logout()
+                }
               }
             }
           }
@@ -700,19 +802,62 @@ Panel {
               opacity: 0.12
             }
 
-            Text {
-              text: root.editingNote ? "Rediger notat" : "Ny note"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
+            Item {
+              width: parent.width
+              height: Math.max(editorTitle.implicitHeight, editorActions.implicitHeight)
+
+              Text {
+                id: editorTitle
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.editingNote ? "Edit note" : "New note"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
+
+              Row {
+                id: editorActions
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                PanelActionButton {
+                  iconText: "󰄬"
+                  tooltipText: "Save"
+                  hoverColor: Commons.Color.accent
+                  enabled: !root.editorSaving
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.saveNote()
+                }
+                PanelActionButton {
+                  iconText: "󰅖"
+                  tooltipText: "Cancel"
+                  enabled: !root.editorSaving
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.closeEditor()
+                }
+                PanelActionButton {
+                  visible: root.editingNote !== null
+                  iconText: "󰆴"
+                  tooltipText: "Delete note"
+                  hoverColor: Commons.Color.urgent
+                  enabled: !root.editorSaving
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.deleteNote()
+                }
+              }
             }
 
             Column {
               width: parent.width
               spacing: Style.space(6)
               Text {
-                text: "Sti (navn på filen)"
+                text: "Path (file name)"
                 color: Qt.darker(root.bar.foreground, 1.3)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -720,7 +865,7 @@ Panel {
               TextField {
                 width: parent.width
                 text: root.editorPath
-                placeholderText: "f.eks. Notater/Mitt notat.md"
+                placeholderText: "e.g. Notes/My note.md"
                 foreground: root.bar.foreground
                 onTextChanged: root.editorPath = text
               }
@@ -730,7 +875,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
               Text {
-                text: "Innhold"
+                text: "Content"
                 color: Qt.darker(root.bar.foreground, 1.3)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
@@ -749,36 +894,10 @@ Panel {
             Text {
               visible: root.editorError !== ""
               text: root.editorError
-              color: "#f38ba8"
+              color: Commons.Color.urgent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
-            }
-
-            Row {
-              spacing: Style.space(8)
-              Button {
-                text: root.editorSaving ? "Lagrer…" : "Lagre"
-                enabled: !root.editorSaving
-                foreground: root.bar.background
-                background: Commons.Color.accent
-                onClicked: root.saveNote()
-              }
-              Button {
-                text: "Avbryt"
-                enabled: !root.editorSaving
-                foreground: root.bar.foreground
-                background: "transparent"
-                onClicked: root.closeEditor()
-              }
-              Button {
-                visible: root.editingNote !== null
-                text: "Slett"
-                enabled: !root.editorSaving
-                foreground: "#f38ba8"
-                background: "transparent"
-                onClicked: root.deleteNote()
-              }
             }
           }
 
@@ -796,29 +915,74 @@ Panel {
               opacity: 0.12
             }
 
-            Row {
-              spacing: Style.space(8)
-              Button {
-                text: "Tilbake"
+            Item {
+              width: parent.width
+              height: Math.max(backButton.implicitHeight, detailTitle.implicitHeight, detailActions.implicitHeight)
+
+              PanelActionButton {
+                id: backButton
+                anchors.left: parent.left
+                anchors.leftMargin: -Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                iconText: "󰁍"
+                tooltipText: "Back"
                 foreground: root.bar.foreground
-                background: "transparent"
+                fontFamily: root.bar.fontFamily
                 onClicked: root.selectedNote = null
               }
-              Text {
-                text: root.selectedNote ? root.selectedNote.title : ""
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
+
+              Column {
+                id: detailTitle
+                anchors.left: backButton.right
+                anchors.right: detailActions.left
+                anchors.leftMargin: Style.space(4)
+                anchors.rightMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  elide: Text.ElideRight
+                  text: root.selectedNote ? root.selectedNote.title : ""
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.title
+                  font.bold: true
+                }
+                Text {
+                  width: parent.width
+                  elide: Text.ElideRight
+                  visible: root.selectedNote && root.selectedNote.path
+                  text: root.selectedNote ? root.selectedNote.path : ""
+                  color: Qt.darker(root.bar.foreground, 1.5)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
-              Text {
-                visible: root.selectedNote && root.selectedNote.path
-                text: root.selectedNote ? root.selectedNote.path : ""
-                color: Qt.darker(root.bar.foreground, 1.5)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
+
+              Row {
+                id: detailActions
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                PanelActionButton {
+                  iconText: "󰏫"
+                  tooltipText: "Edit"
+                  enabled: !root.editorSaving
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.editNote(root.selectedNote)
+                }
+                PanelActionButton {
+                  iconText: "󰆴"
+                  tooltipText: "Delete note"
+                  hoverColor: Commons.Color.urgent
+                  enabled: !root.editorSaving
+                  foreground: root.bar.foreground
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.deleteNote()
+                }
               }
             }
 
@@ -882,24 +1046,6 @@ Panel {
                 }
               }
             }
-
-            Row {
-              spacing: Style.space(8)
-              Button {
-                text: "Rediger"
-                enabled: !root.editorSaving
-                foreground: root.bar.background
-                background: Commons.Color.accent
-                onClicked: root.editNote(root.selectedNote)
-              }
-              Button {
-                text: "Slett"
-                enabled: !root.editorSaving
-                foreground: "#f38ba8"
-                background: "transparent"
-                onClicked: root.deleteNote()
-              }
-            }
           }
 
           // ---------------- Notes list ----------------
@@ -914,33 +1060,17 @@ Panel {
               spacing: Style.space(8)
 
               Text {
-                text: root.notes.length + " notat" + (root.notes.length === 1 ? "" : "er")
+                text: root.notes.length + (root.notes.length === 1 ? " note" : " notes")
                 color: Qt.darker(root.bar.foreground, 1.3)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.bodySmall
               }
-              Button {
-                text: root.loading ? "Synker…" : "Ny note"
-                enabled: !root.loading
-                foreground: root.bar.background
-                background: Commons.Color.accent
-                onClicked: root.newNote()
-              }
-              Button {
-                text: root.loading ? "Synker…" : "Oppdater"
-                enabled: !root.loading
-                foreground: root.bar.foreground
-                background: "transparent"
-                fontSize: Style.font.bodySmall
-                onClicked: root.refresh()
-              }
-              Button {
-                text: "Innstillinger"
-                enabled: !root.loading
-                foreground: root.bar.foreground
-                background: "transparent"
-                fontSize: Style.font.bodySmall
-                onClicked: root.showSettings = true
+              Text {
+                visible: root.loading
+                text: "Syncing…"
+                color: Qt.darker(root.bar.foreground, 1.3)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
               }
             }
 
@@ -974,7 +1104,7 @@ Panel {
                 height: Style.space(72)
                 Text {
                   anchors.centerIn: parent
-                  text: "Ingen notater ennå — lag en ny, eller synk fra Futo Notes-appen."
+                  text: "No notes yet — create one, or sync from the Futo Notes app."
                   color: Qt.darker(root.bar.foreground, 1.5)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.body
@@ -985,12 +1115,13 @@ Panel {
             Text {
               visible: root.errorMessage !== ""
               text: root.errorMessage
-              color: "#f38ba8"
+              color: Commons.Color.urgent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.WordWrap
             }
           }
+
         }
       }
     }

@@ -44,7 +44,7 @@ Rectangle {
     Row {
       spacing: Style.space(8)
       Text {
-        text: row.isImage ? "🖼" : "󰠮"
+        text: row.isImage ? "󰋩" : "󰠮"
         color: row.foreground
         font.family: row.fontFamily
         font.pixelSize: Style.font.body
