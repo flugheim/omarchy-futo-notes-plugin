@@ -55,8 +55,17 @@ Panel {
   // Settings form buffers
   property string formUrl: ""
   property string formPassword: ""
+  property bool passwordStored: false
 
   readonly property bool configured: !!(settings.serverUrl && String(settings.serverUrl).length > 0)
+
+  // Single source of truth for which section the panel shows.
+  readonly property string view: {
+    if (editorOpen) return "editor"
+    if (selectedNote !== null) return "detail"
+    if (showSettings || !configured) return "settings"
+    return "list"
+  }
 
   // ---------------------------------------------------------------- lifecycle
   Component.onCompleted: {
@@ -73,12 +82,11 @@ Panel {
     
     // Try to load password from keyring if server URL is configured
     if (configured && formUrl && formUrl.length > 0) {
-      // We need to call the sync helper to lookup password from keyring
-      // but we need to wait for the component to be fully initialized
-       Qt.callLater(function() {
-         keyringLookup.running = true
-       })
-    
+      Qt.callLater(function() {
+        keyringLookup.running = true
+      })
+    }
+
     if (!configured) showSettings = true
   }
 
@@ -347,6 +355,7 @@ Panel {
         editorSaving = false
       } else {
         errorMessage = res.error || "Sync feilet."
+        if (String(errorMessage).indexOf("No password saved") !== -1) passwordStored = false
         settings = Object.assign({}, settings, { lastError: errorMessage })
         persistSettings()
       }
@@ -357,14 +366,20 @@ Panel {
   function connectAndSync() {
     var url = String(formUrl || "").trim().replace(/\/+$/, "")
     if (!url) { errorMessage = "Oppgi synk-server-URL."; return }
-    if (!formPassword) { errorMessage = "Oppgi synk-passordet."; return }
+    if (!formPassword && !passwordStored) { errorMessage = "Oppgi synk-passordet."; return }
 
     errorMessage = ""
     statusMessage = ""
     savingPassword = true
     settings = Object.assign({}, settings, { serverUrl: url })
     persistSettings()
-    runSync({ serverUrl: url, password: formPassword, savePassword: true })
+    var payload = { serverUrl: url }
+    if (formPassword) {
+      payload.password = formPassword
+      payload.savePassword = true
+      passwordStored = true
+    }
+    runSync(payload)
   }
 
   property string testPayload: ""
@@ -379,10 +394,8 @@ Panel {
       onStreamFinished: {
         var res = ({})
         try { res = JSON.parse(String(text || "").trim() || "{}") } catch (e) {}
-        // If successful and no "No password saved" error, show the indicator
-        if (res.ok && formPassword === "" && !(res.error && res.error.includes("No password saved"))) {
-          formPassword = "[lagret i nøkkelringen]"
-        }
+        // A successful sync means a usable password is already in the keyring.
+        root.passwordStored = res.ok === true
       }
     }
     stderr: StdioCollector { waitForEnd: true }
@@ -392,7 +405,7 @@ Panel {
   function testConnection() {
     var url = String(formUrl || "").trim().replace(/\/+$/, "")
     if (!url) { errorMessage = "Oppgi synk-server-URL."; return }
-    if (!formPassword) { errorMessage = "Oppgi synk-passordet."; return }
+    if (!formPassword && !passwordStored) { errorMessage = "Oppgi synk-passordet."; return }
 
     errorMessage = ""
     statusMessage = "Tester…"
@@ -410,6 +423,7 @@ Panel {
     editorContent = ""
     formUrl = ""
     formPassword = ""
+    passwordStored = false
     errorMessage = ""
     statusMessage = ""
     persistSettings()
@@ -556,7 +570,8 @@ Panel {
 
           // ---------------- Settings form ----------------
           Column {
-            visible: root.showSettings || (!root.configured && !root.selectedNote)
+            id: settingsCol
+            visible: root.view === "settings"
             width: parent.width
             spacing: Style.space(12)
 
@@ -609,6 +624,14 @@ Panel {
                 foreground: root.bar.foreground
                 password: true
                 onTextChanged: root.formPassword = text
+              }
+              Text {
+                visible: root.passwordStored && root.formPassword === ""
+                text: "Et passord er allerede lagret i systemnøkkelringen."
+                color: "#a6e3a1"
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WordWrap
               }
               Text {
                 text: "Lagres i systemnøkkelringen (secret-tool), aldri i en fil."
@@ -665,7 +688,8 @@ Panel {
 
           // ---------------- Editor popup ----------------
           Column {
-            visible: root.editorOpen
+            id: editorCol
+            visible: root.view === "editor"
             width: parent.width
             spacing: Style.space(12)
 
@@ -760,7 +784,8 @@ Panel {
 
           // ---------------- Note detail (view mode) ----------------
           Column {
-            visible: root.selectedNote !== null && !root.editorOpen && !root.showSettings
+            id: detailCol
+            visible: root.view === "detail"
             width: parent.width
             spacing: Style.space(12)
 
@@ -849,6 +874,7 @@ Panel {
                   }
                 }
               }
+            }
 
             Row {
               spacing: Style.space(8)
@@ -871,7 +897,8 @@ Panel {
 
           // ---------------- Notes list ----------------
           Column {
-            visible: root.configured && !root.showSettings && !root.editorOpen && !root.selectedNote
+            id: notesCol
+            visible: root.view === "list"
             width: parent.width
             spacing: Style.space(8)
 
@@ -961,5 +988,4 @@ Panel {
       }
     }
   }
-}
 }
