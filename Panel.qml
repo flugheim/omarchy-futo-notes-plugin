@@ -70,6 +70,18 @@ Panel {
     try { s = JSON.parse(settingsFile.text() || "{}") } catch (e) { s = ({}) }
     settings = s
     formUrl = s.serverUrl || ""
+    
+    // Try to load password from keyring if server URL is configured
+    if (configured && formUrl && formUrl.length > 0) {
+      // We need to call the sync helper to lookup password from keyring
+      // but we need to wait for the component to be fully initialized
+      Qt.callLater(function() {
+        // Use the same process as sync but without triggering a full sync
+        testPayload = JSON.stringify({ serverUrl: formUrl }) + "\n"
+        testProc.running = true
+      })
+    }
+    
     if (!configured) showSettings = true
   }
 
@@ -435,6 +447,12 @@ Panel {
         root.loading = false
         var res = ({})
         try { res = JSON.parse(String(text || "").trim() || "{}") } catch (e) {}
+        
+        // Check if we have a successful result (which indicates password exists in keyring)
+        if (res.ok && formPassword === "" && !(res.error && res.error.includes("No password saved"))) {
+          formPassword = "[lagret i nøkkelringen]"
+        }
+        
         if (res.ok)
           root.statusMessage = "Koblet — funnet " + (res.notes ? res.notes.length : 0) + " notat(er)."
         else
@@ -470,7 +488,7 @@ Panel {
     centerOnBar: false
     focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(520))
-    contentHeight: Math.max(panel.fittedContentHeight(panel.loadedContentHeight), Style.space(200))
+    contentHeight: Style.space(500)
 
     content: PanelKeyCatcher {
       id: keyCatcher
