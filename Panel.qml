@@ -21,7 +21,7 @@ Panel {
   // ---------------------------------------------------------------- paths
   readonly property string home: Quickshell.env("HOME")
   readonly property string settingsPath: home + "/.local/state/omarchy/settings/futo-notes.json"
-  readonly property string scriptPath: home + "/.config/omarchy/plugins/futo-notes/futo-notes-sync.py"
+  readonly property string scriptPath: home + "/.config/omarchy/plugins/flugheim.futo-notes/futo-notes-sync.py"
 
   // ---------------------------------------------------------------- state
   property var settings: ({})
