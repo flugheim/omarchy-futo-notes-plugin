@@ -33,8 +33,8 @@ try:
 except ImportError:
     print(json.dumps({
         "ok": False,
-        "error": "Python 'cryptography' package is required. Install with: "
-                 "sudo pacman -S python-cryptography"
+        "error": "Python 'cryptography' package is required. "
+                 "Install it with your system package manager (python-cryptography)."
     }))
     sys.exit(0)
 
