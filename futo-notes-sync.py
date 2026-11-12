@@ -85,8 +85,8 @@ def request(method, url, token=None, body=None, raw=False, timeout=20,
     data = None
     headers = {
         "Accept": "application/json",
-        # Some reverse proxies (Cloudflare in front of notes.example.com)
-        # reject urllib's default signature, so present a normal app UA.
+        # Some reverse proxies (e.g. Cloudflare) reject urllib's default
+        # signature, so present a normal app UA.
         "User-Agent": "FutoNotes/1.9.2 (Linux; omarchy-plugin)",
     }
     if extra_headers:
