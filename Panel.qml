@@ -828,16 +828,20 @@ Panel {
 
               Repeater {
                 model: root.contentBlocks
-                delegate: Item {
+                delegate: Column {
+                  id: blockDelegate
+                  property int blockIndex: index
                   width: parent.width
+                  spacing: Style.space(8)
 
                   // Text paragraph block
                   Text {
                     visible: modelData.type === "text"
-                    text: modelData.text
+                    text: modelData.type === "text" ? modelData.text : ""
                     color: root.bar.foreground
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.body
+                    lineHeight: 1.25
                     wrapMode: Text.WordWrap
                     width: parent.width
                   }
@@ -856,7 +860,10 @@ Panel {
 
                         CheckBox {
                           checked: modelData.checked
-                          onCheckedChanged: root.toggleTask(repeater.model.index, index)
+                          onCheckedChanged: {
+                            if (checked !== modelData.checked)
+                              root.toggleTask(blockDelegate.blockIndex, index)
+                          }
                           width: Style.space(24)
                           height: Style.space(24)
                         }
