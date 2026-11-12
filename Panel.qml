@@ -75,12 +75,9 @@ Panel {
     if (configured && formUrl && formUrl.length > 0) {
       // We need to call the sync helper to lookup password from keyring
       // but we need to wait for the component to be fully initialized
-      Qt.callLater(function() {
-        // Use the same process as sync but without triggering a full sync
-        testPayload = JSON.stringify({ serverUrl: formUrl }) + "\n"
-        testProc.running = true
-      })
-    }
+       Qt.callLater(function() {
+         keyringLookup.running = true
+       })
     
     if (!configured) showSettings = true
   }
@@ -372,6 +369,26 @@ Panel {
 
   property string testPayload: ""
 
+  // Process to lookup password from keyring when panel loads
+  Process {
+    id: keyringLookup
+    command: ["python3", root.scriptPath]
+    stdinEnabled: true
+    onStarted: write(JSON.stringify({ serverUrl: formUrl }) + "\n")
+    stdout: StdioCollector { waitForEnd: true
+      onStreamFinished: {
+        var res = ({})
+        try { res = JSON.parse(String(text || "").trim() || "{}") } catch (e) {}
+        // If successful and no "No password saved" error, show the indicator
+        if (res.ok && formPassword === "" && !(res.error && res.error.includes("No password saved"))) {
+          formPassword = "[lagret i nøkkelringen]"
+        }
+      }
+    }
+    stderr: StdioCollector { waitForEnd: true }
+    onExited: { }
+  }
+
   function testConnection() {
     var url = String(formUrl || "").trim().replace(/\/+$/, "")
     if (!url) { errorMessage = "Oppgi synk-server-URL."; return }
@@ -447,11 +464,6 @@ Panel {
         root.loading = false
         var res = ({})
         try { res = JSON.parse(String(text || "").trim() || "{}") } catch (e) {}
-        
-        // Check if we have a successful result (which indicates password exists in keyring)
-        if (res.ok && formPassword === "" && !(res.error && res.error.includes("No password saved"))) {
-          formPassword = "[lagret i nøkkelringen]"
-        }
         
         if (res.ok)
           root.statusMessage = "Koblet — funnet " + (res.notes ? res.notes.length : 0) + " notat(er)."
